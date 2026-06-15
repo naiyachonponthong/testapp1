@@ -1551,10 +1551,18 @@ function buildWithdrawPage() {
     html += '<tr>';
     html += '<td class="px-4 py-2.5 font-mono text-xs text-navy-700">' + escHtml(w.withdraw_no) + (w.via_qr?'<span class="ml-1 text-teal-600 text-xs" title="สแกน QR"><i class="fi fi-rr-qr-scan"></i></span>':'') + '</td>';
     html += '<td class="px-4 py-2.5 text-xs text-gray-500">' + formatDate(w.requested_at) + '</td>';
-    html += '<td class="px-4 py-2.5 font-medium text-gray-700 max-w-xs truncate">' + escHtml(w.item_name) + '</td>';
-    html += '<td class="px-4 py-2.5 text-center text-xs"><span class="text-gray-800 font-bold">' + w.quantity_requested + '</span>';
-    if (w.status==='approved') html += '<span class="text-green-600 ml-1">/' + w.quantity_approved + '</span>';
-    html += ' <span class="text-gray-400">' + escHtml(w.unit) + '</span></td>';
+    html += '<td class="px-4 py-2.5 font-medium text-gray-700 max-w-xs">';
+    if (w.is_batch && w.items && w.items.length > 1) {
+      html += '<div class="font-semibold text-xs text-navy-700 mb-0.5"><i class="fi fi-rr-list mr-1"></i>' + w.items.length + ' รายการ</div>';
+      html += '<div class="text-xs text-gray-500 space-y-0.5">';
+      w.items.forEach(function(it){ html += '<div>• ' + escHtml(it.item_name) + ' <b>' + it.quantity_requested + ' ' + escHtml(it.unit) + '</b></div>'; });
+      html += '</div>';
+    } else { html += escHtml(w.item_name); }
+    html += '</td>';
+    html += '<td class="px-4 py-2.5 text-center text-xs"><span class="text-gray-800 font-bold">';
+    if (w.is_batch && w.items && w.items.length > 1) { html += w.items.length + ' รายการ'; }
+    else { html += w.quantity_requested + '</span>' + (w.status==='approved'?'<span class="text-green-600 ml-1">/' + w.quantity_approved + '</span>':'') + ' <span class="text-gray-400">' + escHtml(w.unit); }
+    html += '</span></td>';
     html += '<td class="px-4 py-2.5 text-xs text-gray-500 max-w-xs truncate">' + escHtml(w.purpose||'-') + '</td>';
     html += '<td class="px-4 py-2.5 text-xs text-gray-600">' + escHtml(w.requested_by_name||'-') + '</td>';
     html += '<td class="px-4 py-2.5 text-center"><span class="px-2 py-0.5 rounded-full text-xs font-medium ' + badgeClass + '">' + statusLabel + '</span></td>';
@@ -1774,45 +1782,23 @@ function filterWdItemList() {
   document.getElementById('wdItemList').innerHTML = buildWdItemListCart(filtered);
 }
 function submitWdCart() {
-  var purpose  = (document.getElementById('wdCartPurpose')||{}).value||'';
-  var note     = (document.getElementById('wdCartNote')||{}).value||'';
-  var entries  = Object.keys(_wdCart).map(function(id){ return { id: id, qty: _wdCart[id] }; });
-  if (entries.length === 0) { showError('กรุณาเลือกวัสดุอย่างน้อย 1 รายการ'); return; }
+  var purpose = (document.getElementById('wdCartPurpose')||{}).value||'';
+  var note    = (document.getElementById('wdCartNote')||{}).value||'';
+  var items   = Object.keys(_wdCart).map(function(id){ return { item_id: id, quantity: _wdCart[id] }; });
+  if (items.length === 0) { showError('กรุณาเลือกวัสดุอย่างน้อย 1 รายการ'); return; }
   if (!purpose) { showError('กรุณาระบุวัตถุประสงค์'); return; }
   closeModal();
   showLoading('กำลังยื่นคำขอ...');
-  var results = [], errors = [], idx = 0;
-  function processNext() {
-    if (idx >= entries.length) {
+  callAPI('addWithdrawalBatch', AUTH.token, { items: items, purpose: purpose, note: note })
+    .then(function(res) {
       hideLoading(); _wdCart = {};
-      if (errors.length > 0) {
-        Swal.fire({
-          icon: results.length > 0 ? 'warning' : 'error',
-          title: results.length > 0 ? 'บันทึกบางส่วน' : 'เกิดข้อผิดพลาด',
-          html: (results.length > 0 ? '<p><b>สำเร็จ:</b> ' + results.join(', ') + '</p>' : '')
-            + '<p><b>ผิดพลาด:</b><br>' + errors.join('<br>') + '</p>',
-          customClass: { popup: 'swal2-popup' }
-        });
-      } else {
-        showSuccess('ยื่นคำขอเบิก ' + results.length + ' รายการเรียบร้อย รอการอนุมัติ');
-      }
-      if (_currentPage === 'withdraw') renderWithdraw();
-      else if (_currentPage === 'dashboard') renderDashboard();
-      return;
-    }
-    var entry = entries[idx++];
-    callAPI('addWithdrawal', AUTH.token, { item_id: entry.id, quantity: entry.qty, purpose: purpose, note: note, via_qr: false })
-      .then(function(res) {
-        if (res.success) { results.push(res.withdraw_no); }
-        else {
-          var item = _itemsData.find(function(i){ return i.id === entry.id; });
-          errors.push((item ? escHtml(item.name) : entry.id) + ': ' + res.message);
-        }
-        processNext();
-      })
-      .catch(function(){ errors.push('เกิดข้อผิดพลาด (รายการที่ ' + idx + ')'); processNext(); });
-  }
-  processNext();
+      if (res.success) {
+        showSuccess('ยื่นคำขอ #' + res.withdraw_no + ' (' + items.length + ' รายการ) เรียบร้อย รอการอนุมัติ');
+        if (_currentPage === 'withdraw') renderWithdraw();
+        else if (_currentPage === 'dashboard') renderDashboard();
+      } else showError(res.message);
+    })
+    .catch(function(){ hideLoading(); showError('เกิดข้อผิดพลาด'); });
 }
 
 function openWithdrawModal(itemId) {
@@ -1939,14 +1925,25 @@ function buildApprovePage(filterStatus) {
       html += '<div class="w-12 h-12 bg-' + (w.status==='pending'?'amber':'gray') + '-100 rounded-xl flex items-center justify-center flex-shrink-0">';
       html += '<i class="fi fi-rr-inbox-out text-' + (w.status==='pending'?'amber':'gray') + '-600 text-xl"></i></div>';
       html += '<div class="flex-1 min-w-0"><div class="flex flex-wrap items-center gap-2 mb-1">';
-      html += '<span class="font-bold text-gray-800 text-sm">' + escHtml(w.item_name) + '</span>';
+      if (w.is_batch && w.items && w.items.length > 1) {
+        html += '<span class="font-bold text-gray-800 text-sm"><i class="fi fi-rr-list mr-1"></i>' + w.items.length + ' รายการ</span>';
+      } else {
+        html += '<span class="font-bold text-gray-800 text-sm">' + escHtml(w.item_name) + '</span>';
+      }
       html += '<span class="font-mono text-xs text-navy-600">#' + escHtml(w.withdraw_no) + '</span>';
       html += '<span class="px-2 py-0.5 rounded-full text-xs font-medium ' + badgeClass + '">' + statusLabel + '</span>';
       if (w.via_qr) html += '<span class="text-xs bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full"><i class="fi fi-rr-qr-scan mr-0.5"></i>QR</span>';
       html += '</div>';
+      if (w.is_batch && w.items && w.items.length > 1) {
+        html += '<div class="bg-gray-50 rounded-lg px-3 py-2 mb-2 space-y-0.5">';
+        w.items.forEach(function(it){
+          html += '<div class="text-xs text-gray-600">• ' + escHtml(it.item_name) + ' <b class="text-gray-800">' + it.quantity_requested + ' ' + escHtml(it.unit) + '</b></div>';
+        });
+        html += '</div>';
+      }
       html += '<div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs text-gray-500">';
       html += '<span><i class="fi fi-rr-user mr-1"></i>' + escHtml(w.requested_by_name||'-') + '</span>';
-      html += '<span><i class="fi fi-rr-layers mr-1"></i>' + w.quantity_requested + ' ' + escHtml(w.unit) + '</span>';
+      html += '<span><i class="fi fi-rr-layers mr-1"></i>' + (w.is_batch && w.items && w.items.length > 1 ? w.items.length + ' รายการ' : w.quantity_requested + ' ' + escHtml(w.unit)) + '</span>';
       html += '<span><i class="fi fi-rr-target mr-1"></i>' + escHtml(w.purpose||'-') + '</span>';
       html += '<span><i class="fi fi-rr-calendar-day mr-1"></i>' + formatDate(w.requested_at) + '</span>';
       html += '</div>';
@@ -1973,16 +1970,33 @@ function buildApprovePage(filterStatus) {
 
 function openApproveModal(wdId, qty) {
   var wd = _approveData.find(function(w){ return w.id === wdId; });
-  var item = wd && _itemsData.find(function(i){ return i.id === wd.item_id; });
-  var img = item ? imgUrl(item.image_file_id) : '';
-  var imgHtml = img ? '<div class="flex justify-center"><img src="' + img + '" class="w-24 h-24 object-cover rounded-xl border border-gray-200 shadow-sm"></div>' : '';
   var body = '<div class="space-y-4">';
-  body += imgHtml;
-  body += '<div class="text-center"><p class="font-semibold text-gray-800">' + escHtml((wd && wd.item_name) || '-') + '</p>';
-  body += '<p class="text-xs text-gray-500">ผู้ขอเบิก: <b>' + escHtml((wd && wd.requested_by_name) || '-') + '</b> • วัตถุประสงค์: ' + escHtml((wd && wd.purpose) || '-') + '</p></div>';
-  body += '<div><label class="form-label">จำนวนที่อนุมัติ *</label>';
-  body += '<input type="number" id="approveQty" value="' + qty + '" min="1" max="' + qty + '" class="form-input">';
-  body += '<p class="text-xs text-gray-400 mt-1">จำนวนที่ขอ: ' + qty + ' ' + escHtml((wd && wd.unit) || '') + '</p></div></div>';
+  body += '<div class="bg-gray-50 rounded-xl p-3 text-xs text-gray-500">';
+  body += 'ผู้ขอเบิก: <b class="text-gray-800">' + escHtml((wd && wd.requested_by_name) || '-') + '</b>';
+  body += ' • วัตถุประสงค์: ' + escHtml((wd && wd.purpose) || '-') + '</div>';
+  if (wd && wd.is_batch && wd.items && wd.items.length > 1) {
+    // Batch: show all items, no qty input (approve as requested)
+    body += '<div><p class="form-label mb-2">รายการที่จะอนุมัติ (' + wd.items.length + ' รายการ)</p>';
+    body += '<div class="space-y-1.5 max-h-48 overflow-y-auto">';
+    wd.items.forEach(function(it){
+      body += '<div class="flex items-center justify-between bg-green-50 border border-green-200 rounded-lg px-3 py-2">';
+      body += '<span class="text-sm text-gray-700">' + escHtml(it.item_name) + '</span>';
+      body += '<span class="font-bold text-green-700 text-sm">' + it.quantity_requested + ' ' + escHtml(it.unit) + '</span>';
+      body += '</div>';
+    });
+    body += '</div></div>';
+    body += '<input type="hidden" id="approveQty" value="' + (wd.quantity_requested||0) + '">';
+  } else {
+    // Single item: allow qty adjustment
+    var item = wd && _itemsData.find(function(i){ return i.id === wd.item_id; });
+    var img = item ? imgUrl(item.image_file_id) : '';
+    if (img) body += '<div class="flex justify-center"><img src="' + img + '" class="w-20 h-20 object-cover rounded-xl border border-gray-200"></div>';
+    body += '<p class="text-center font-semibold text-gray-800 text-sm">' + escHtml((wd && wd.item_name) || '-') + '</p>';
+    body += '<div><label class="form-label">จำนวนที่อนุมัติ *</label>';
+    body += '<input type="number" id="approveQty" value="' + qty + '" min="1" max="' + qty + '" class="form-input">';
+    body += '<p class="text-xs text-gray-400 mt-1">จำนวนที่ขอ: ' + qty + ' ' + escHtml((wd && wd.unit) || '') + '</p></div>';
+  }
+  body += '</div>';
   var footer = '<button onclick="closeModal()" class="btn-secondary">ยกเลิก</button>'
     + '<button onclick="doApprove(\'' + wdId + '\')" class="btn-success"><i class="fi fi-rr-check mr-1"></i>ยืนยันอนุมัติ</button>';
   openModal('อนุมัติการเบิก', body, footer);
