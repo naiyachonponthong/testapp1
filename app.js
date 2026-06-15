@@ -1495,6 +1495,124 @@ function printSelectedQRLabels() {
   win.document.close();
 }
 
+// ===== WITHDRAWAL SLIP PRINT =====
+var _appConfig = {};
+
+function printWithdrawalSlip(wdId) {
+  var wd = (_wdData||[]).find(function(w){ return w.id === wdId; })
+        || (_approveData||[]).find(function(w){ return w.id === wdId; });
+  if (wd) { _openPrintSlip(wd); return; }
+  showLoading('กำลังโหลด...');
+  callAPI('getWithdrawals', AUTH.token, { status:'all' }).then(function(res) {
+    hideLoading();
+    var found = (res.data||[]).find(function(w){ return w.id === wdId; });
+    if (found) _openPrintSlip(found);
+    else showError('ไม่พบข้อมูลใบเบิก');
+  }).catch(function(){ hideLoading(); showError('เกิดข้อผิดพลาด'); });
+}
+
+function _openPrintSlip(wd) {
+  var orgName = _appConfig.organization_name || 'เทศบาลตำบลหวายเหนียว';
+  var d = new Date(wd.requested_at);
+  var thMonths = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน',
+                  'กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+  var dayStr   = d.getDate();
+  var monthStr = thMonths[d.getMonth()];
+  var yearStr  = d.getFullYear() + 543;
+
+  var items = [];
+  if (wd.is_batch && wd.items && wd.items.length > 0) {
+    items = wd.items.map(function(it) {
+      return { name: it.item_name, unit: it.unit,
+               req: it.quantity_requested,
+               apv: wd.status === 'approved' ? (it.quantity_approved || it.quantity_requested) : '' };
+    });
+  } else {
+    items = [{ name: wd.item_name, unit: wd.unit,
+               req: wd.quantity_requested,
+               apv: wd.status === 'approved' ? wd.quantity_approved : '' }];
+  }
+  var MIN_ROWS = 8;
+  while (items.length < MIN_ROWS) items.push({ name:'', unit:'', req:'', apv:'' });
+
+  var tableRows = items.map(function(it, i) {
+    var nameCell = it.name ? (it.name + (it.unit ? ' (' + it.unit + ')' : '')) : '';
+    return '<tr>'
+      + '<td style="text-align:center">' + (it.name ? (i+1) : '') + '</td>'
+      + '<td>' + nameCell + '</td>'
+      + '<td style="text-align:center">' + (it.req||'') + '</td>'
+      + '<td style="text-align:center">' + (it.apv||'') + '</td>'
+      + '<td></td>'
+      + '</tr>';
+  }).join('');
+
+  var sigBlock = function(role, label) {
+    return '<div style="height:28px"></div>'
+      + '<div style="text-align:center;border-bottom:1px dotted #666;margin:0 20px">&nbsp;</div>'
+      + '<div style="text-align:center">(ลงชื่อ)…………………………………… ' + label + '</div>'
+      + '<div style="text-align:center">(………………………………………)</div>'
+      + '<div>ตำแหน่ง………………………………………………</div>'
+      + '<div>วันที่ …………/…………/…………</div>';
+  };
+
+  var html = '<!DOCTYPE html><html lang="th"><head><meta charset="UTF-8">'
+    + '<title>ใบเบิกพัสดุ ' + wd.withdraw_no + '</title>'
+    + '<style>'
+    + '@page{size:A4 portrait;margin:2cm 2cm 1.5cm 2cm}'
+    + '*{box-sizing:border-box}'
+    + 'body{font-family:"TH Sarabun New","Sarabun",serif;font-size:15pt;margin:0;padding:0;color:#000}'
+    + 'h1{text-align:center;font-size:20pt;margin:0 0 2px}'
+    + '.org{text-align:center;font-size:15pt;margin:0 0 14px}'
+    + '.dl{border-bottom:1px solid #000;display:inline-block}'
+    + '.section{margin-bottom:6px}'
+    + 'table.it{width:100%;border-collapse:collapse;margin:10px 0 14px}'
+    + 'table.it th,table.it td{border:1px solid #000;padding:3px 6px}'
+    + 'table.it th{text-align:center;font-weight:bold}'
+    + 'table.it td{height:28px;vertical-align:middle}'
+    + 'table.sg{width:100%;border-collapse:collapse}'
+    + 'table.sg td{border:1px solid #000;padding:8px 12px;vertical-align:top;width:50%}'
+    + '.no-print{background:#e3f2fd;text-align:center;padding:10px;margin-bottom:12px}'
+    + '@media print{.no-print{display:none}}'
+    + '</style></head><body>'
+    + '<div class="no-print">'
+    + '<button onclick="window.print()" style="padding:8px 20px;font-size:14pt;background:#1565c0;color:#fff;border:none;border-radius:4px;cursor:pointer;margin-right:8px">🖨️ พิมพ์ / บันทึกเป็น PDF</button>'
+    + '<button onclick="window.close()" style="padding:8px 20px;font-size:14pt;border:1px solid #999;border-radius:4px;cursor:pointer">✕ ปิด</button>'
+    + '<span style="margin-left:16px;font-size:11pt;color:#555">เลือก "บันทึกเป็น PDF" ใน Destination เพื่อส่งออก PDF</span>'
+    + '</div>'
+    + '<div style="text-align:right;font-size:13pt">เล่ม ……………</div>'
+    + '<h1>ใบเบิกพัสดุ</h1>'
+    + '<div class="org">' + orgName + '</div>'
+    + '<div style="text-align:right" class="section">ฝ่าย/งาน<span class="dl" style="min-width:220px">&nbsp;</span></div>'
+    + '<div style="text-align:right" class="section">วันที่ <span class="dl" style="min-width:50px">&nbsp;' + dayStr + '&nbsp;</span> เดือน <span class="dl" style="min-width:110px">&nbsp;' + monthStr + '&nbsp;</span> พ.ศ. <span class="dl" style="min-width:70px">&nbsp;' + yearStr + '&nbsp;</span></div>'
+    + '<div class="section">ข้าพเจ้า<span class="dl" style="min-width:170px">&nbsp;' + (wd.requested_by_name||'') + '&nbsp;</span> ตำแหน่ง<span class="dl" style="min-width:260px">&nbsp;</span></div>'
+    + '<div class="section">ขอเบิกพัสดุตามรายการต่อไปนี้เพื่อใช้งาน<span class="dl" style="min-width:280px">&nbsp;' + (wd.purpose||'') + '&nbsp;</span></div>'
+    + '<div style="border-bottom:1px solid #000;margin:4px 0 8px"></div>'
+    + '<table class="it"><thead>'
+    + '<tr><th rowspan="2" style="width:9%">ลำดับที่</th><th rowspan="2" style="width:46%">รายการ</th><th colspan="2" style="width:30%">จำนวนหน่วย</th><th rowspan="2" style="width:15%">หมายเหตุ</th></tr>'
+    + '<tr><th style="width:15%">ขอเบิก</th><th style="width:15%">เบิกได้</th></tr>'
+    + '</thead><tbody>' + tableRows + '</tbody></table>'
+    + '<table class="sg">'
+    + '<tr>'
+    + '<td><div style="font-weight:bold">อนุมัติให้เบิกจ่ายได้</div>' + sigBlock('ผู้สั่งจ่าย','ผู้สั่งจ่าย') + '</td>'
+    + '<td><div>&nbsp;</div>' + sigBlock('ผู้เบิก','ผู้เบิก') + '</td>'
+    + '</tr>'
+    + '<tr>'
+    + '<td><div style="font-weight:bold">ได้ตรวจจำนวน ลงบัญชีแล้ว</div>' + sigBlock('เจ้าหน้าที่พัสดุ','เจ้าหน้าที่พัสดุ') + '</td>'
+    + '<td><div>ได้มอบให้…………………………………………………………</div><div>เป็นผู้รับของแทน………………………………………………</div>' + sigBlock('ผู้มอบ','ผู้มอบ') + '</td>'
+    + '</tr>'
+    + '<tr>'
+    + '<td><div style="font-weight:bold">ได้รับของไปถูกต้องแล้ว</div>' + sigBlock('ผู้รับมอบ','ผู้รับมอบ') + '</td>'
+    + '<td><div>&nbsp;</div>' + sigBlock('ผู้รับมอบ','ผู้รับมอบ') + '</td>'
+    + '</tr>'
+    + '</table>'
+    + '</body></html>';
+
+  var win = window.open('', '_blank', 'width=900,height=750,scrollbars=yes');
+  if (!win) { showError('กรุณาอนุญาต Popup สำหรับหน้าเว็บนี้ก่อน แล้วลองใหม่'); return; }
+  win.document.write(html);
+  win.document.close();
+}
+
 // ===== WITHDRAW =====
 var _wdData   = [];
 var _wdPage   = 1;
@@ -1576,7 +1694,7 @@ function buildWithdrawPage() {
         html += '<button onclick="doCancelWithdrawal(\'' + w.id + '\')" class="btn-secondary btn-sm text-xs"><i class="fi fi-rr-cross mr-1"></i>ยกเลิก</button>';
       }
     } else {
-      html += '<span class="text-xs text-gray-400">—</span>';
+      html += '<button onclick="printWithdrawalSlip(\'' + w.id + '\')" class="btn-secondary btn-sm text-xs"><i class="fi fi-rr-print mr-1"></i>พิมพ์ใบเบิก</button>';
     }
     html += '</div></td>';
     html += '</tr>';
@@ -1597,8 +1715,8 @@ function buildWithdrawPage() {
     html += '<span><i class="fi fi-rr-layers mr-1"></i>' + w.quantity_requested + ' ' + escHtml(w.unit) + '</span>';
     html += '<span><i class="fi fi-rr-user mr-1"></i>' + escHtml(w.requested_by_name||'-') + '</span>';
     html += '<span><i class="fi fi-rr-target mr-1"></i>' + escHtml(w.purpose||'-') + '</span></div>';
+    html += '<div class="flex gap-2 pt-1">';
     if (w.status === 'pending') {
-      html += '<div class="flex gap-2 pt-1">';
       if (AUTH.user.role === 'admin') {
         html += '<button onclick="openApproveModal(\'' + w.id + '\',' + w.quantity_requested + ')" class="flex-1 btn-success btn-sm text-xs">อนุมัติ</button>';
         html += '<button onclick="openRejectModal(\'' + w.id + '\')" class="flex-1 btn-danger btn-sm text-xs">ปฏิเสธ</button>';
@@ -1606,8 +1724,9 @@ function buildWithdrawPage() {
       if (w.requested_by === AUTH.user.id) {
         html += '<button onclick="doCancelWithdrawal(\'' + w.id + '\')" class="flex-1 btn-secondary btn-sm text-xs"><i class="fi fi-rr-cross mr-1"></i>ยกเลิก</button>';
       }
-      html += '</div>';
     }
+    html += '<button onclick="printWithdrawalSlip(\'' + w.id + '\')" class="flex-1 btn-secondary btn-sm text-xs"><i class="fi fi-rr-print mr-1"></i>พิมพ์ใบเบิก</button>';
+    html += '</div>';
     html += '</div>';
   });
   html += '</div>';
@@ -1954,12 +2073,13 @@ function buildApprovePage(filterStatus) {
         html += '<p class="text-xs text-red-700 mt-1"><i class="fi fi-rr-cross mr-1"></i>เหตุผล: ' + escHtml(w.reject_reason) + '</p>';
       }
       html += '</div>';
+      html += '<div class="flex gap-2 flex-shrink-0">';
       if (w.status === 'pending') {
-        html += '<div class="flex gap-2 flex-shrink-0">';
         html += '<button onclick="openApproveModal(\'' + w.id + '\',' + w.quantity_requested + ')" class="btn-success flex items-center gap-1.5"><i class="fi fi-rr-check"></i> อนุมัติ</button>';
         html += '<button onclick="openRejectModal(\'' + w.id + '\')" class="btn-danger flex items-center gap-1.5"><i class="fi fi-rr-cross"></i> ปฏิเสธ</button>';
-        html += '</div>';
       }
+      html += '<button onclick="printWithdrawalSlip(\'' + w.id + '\')" class="btn-secondary flex items-center gap-1.5"><i class="fi fi-rr-print"></i> ใบเบิก</button>';
+      html += '</div>';
       html += '</div>';
     });
   }
@@ -3684,6 +3804,7 @@ window.onload = function() {
   callAPI('getConfig').then(function(res) {
     if (res.success && res.data) {
       var cfg = res.data;
+      _appConfig = cfg;
       if (cfg.app_name) {
         document.getElementById('loginAppName').textContent = cfg.app_name;
         document.getElementById('sidebarAppName').textContent = cfg.app_name;
