@@ -2078,7 +2078,7 @@ function buildApprovePage(filterStatus) {
         html += '<button onclick="openApproveModal(\'' + w.id + '\',' + w.quantity_requested + ')" class="btn-success flex items-center gap-1.5"><i class="fi fi-rr-check"></i> อนุมัติ</button>';
         html += '<button onclick="openRejectModal(\'' + w.id + '\')" class="btn-danger flex items-center gap-1.5"><i class="fi fi-rr-cross"></i> ปฏิเสธ</button>';
       }
-      html += '<button onclick="printWithdrawalSlip(\'' + w.id + '\')" class="btn-secondary flex items-center gap-1.5"><i class="fi fi-rr-print"></i> ใบเบิก</button>';
+      html += '<button onclick="printWithdrawalSlip(\'' + w.id + '\')" class="btn-secondary flex items-center gap-1.5" style="background:#e0f2fe;border-color:#7dd3fc;color:#0369a1;"><i class="fi fi-rr-print"></i> พิมพ์/PDF</button>';
       html += '</div>';
       html += '</div>';
     });
