@@ -104,6 +104,7 @@ function doGet(e) {
         case 'generateExportUrl':   result = generateExportUrl(args[0], args[1], args[2]); break;
         case 'uploadFile':          result = uploadFile(args[0], args[1], args[2], args[3]); break;
         case 'testTelegram':        result = testTelegram(args[0]); break;
+        case 'testLine':            result = testLine(args[0]); break;
         case 'getAssetCategories':    result = getAssetCategories(args[0]); break;
         case 'saveAssetCategory':     result = saveAssetCategory(args[0], args[1]); break;
         case 'deleteAssetCategory':   result = deleteAssetCategory(args[0], args[1]); break;
@@ -639,7 +640,7 @@ function addReceive(token, receiveData) {
         + '\nสต็อกคงเหลือ: ' + stockAfter + ' ' + item.unit
         + '\nโดย: ' + session.name
         + '\nวันที่: ' + rec.date;
-      sendTelegram(msg);
+      sendNotification(msg);
 
       return { success: true, message: 'บันทึกรับเข้าเรียบร้อย', receive_no: recNo };
     } finally { lock.releaseLock(); }
@@ -739,7 +740,7 @@ function addWithdrawal(token, wdData) {
       + '\nผู้ขอ: ' + session.name + ' (' + CONFIG.USER_ROLES[session.role].name + ')'
       + '\nวัตถุประสงค์: ' + (wdData.purpose || '-')
       + '\nสต็อกคงเหลือ: ' + stockAfter + ' ' + item.unit + ' (หักแล้ว)';
-    sendTelegram(msg);
+    sendNotification(msg);
 
     return { success: true, message: 'ยื่นคำขอเบิกเรียบร้อย รอการอนุมัติ', withdraw_no: wdNo };
   } catch(err) {
@@ -845,7 +846,7 @@ function approveWithdrawal(token, wdId, qtyApproved) {
         + '\nสต็อกคงเหลือ: ' + stockAfter + ' ' + item.unit
         + '\nอนุมัติโดย: ' + session.name
         + lowMsg;
-      sendTelegram(msg);
+      sendNotification(msg);
 
       return { success: true, message: 'อนุมัติการเบิกเรียบร้อย' };
     } finally { lock.releaseLock(); }
@@ -883,7 +884,7 @@ function rejectWithdrawal(token, wdId, reason) {
       approved_at: new Date().toISOString(),
       reject_reason: reason || ''
     });
-    sendTelegram('<b>ปฏิเสธการเบิก</b> #' + wd.withdraw_no
+    sendNotification('<b>ปฏิเสธการเบิก</b> #' + wd.withdraw_no
       + '\nรายการ: ' + wd.item_name
       + '\nผู้ขอ: ' + wd.requested_by_name
       + '\nเหตุผล: ' + (reason || '-')
@@ -925,7 +926,7 @@ function cancelWithdrawal(token, wdId) {
       approved_by_name: session.name,
       approved_at: new Date().toISOString()
     });
-    sendTelegram('<b>ยกเลิกการเบิก</b> #' + wd.withdraw_no
+    sendNotification('<b>ยกเลิกการเบิก</b> #' + wd.withdraw_no
       + '\nรายการ: ' + wd.item_name
       + '\nผู้ขอ: ' + wd.requested_by_name
       + '\nโดย: ' + session.name);
@@ -1233,10 +1234,38 @@ function generateExportUrl(token, reportType, filters) {
         sheet.appendRow([w.withdraw_no, w.requested_at.split('T')[0], w.item_code, w.item_name,
           w.quantity_requested, w.quantity_approved, w.unit, w.requested_by_name, w.purpose||'', w.status]);
       });
+    } else if (reportType === 'monthly') {
+      var yr  = filters && filters.year  ? parseInt(filters.year)  : new Date().getFullYear();
+      var mo  = filters && filters.month ? parseInt(filters.month) : new Date().getMonth() + 1;
+      var mNames = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+      var daysInMo = new Date(yr, mo, 0).getDate();
+      sheet.setName('สรุปรายเดือน');
+      sheet.appendRow(['สรุปการเบิกวัสดุ ' + mNames[mo-1] + ' ' + (yr+543)]);
+      var hdr = ['ชื่อวัสดุ','ขนาด','หน่วย','รับเข้า'];
+      for (var d = 1; d <= daysInMo; d++) hdr.push(String(d));
+      hdr.push('รวมเบิก','คงเหลือ');
+      sheet.appendRow(hdr);
+      var rpt = getMonthlyReport(token, yr, mo);
+      if (rpt.success && rpt.data) {
+        rpt.data.forEach(function(row) {
+          var r = [row.name, row.size||'', row.unit, row.received||0];
+          for (var d = 1; d <= daysInMo; d++) r.push(row.daily[d]||0);
+          r.push(row.total_withdraw||0, row.current_stock||0);
+          sheet.appendRow(r);
+        });
+      }
+      try { sheet.autoResizeColumns(1, 4); } catch(e) {}
+    } else if (reportType === 'low_stock') {
+      sheet.setName('วัสดุใกล้หมด');
+      sheet.appendRow(['รหัส','ชื่อวัสดุ','ขนาด','หน่วย','สต็อกคงเหลือ','ขั้นต่ำ','สถานะ']);
+      var lsItems = getSheetData('Items').filter(function(i){ return i.active !== false && i.current_stock <= (i.min_stock||5); });
+      lsItems.forEach(function(i){
+        sheet.appendRow([i.item_code, i.name, i.size||'', i.unit, i.current_stock, i.min_stock||5,
+          i.current_stock <= 0 ? 'หมดสต็อก' : 'ใกล้หมด']);
+      });
     }
 
     var url = ss.getUrl();
-    // ย้ายไป Drive ชั่วคราว — ลบหลัง 1h
     DriveApp.getFileById(ss.getId()).setTrashed(false);
     return { success: true, url: url };
   } catch(err) {
@@ -1298,6 +1327,55 @@ function testTelegram(token) {
     if (!session || session.role !== 'admin') return { success: false, message: 'ไม่มีสิทธิ์' };
     sendTelegram('<b>ทดสอบการแจ้งเตือน</b>\nระบบวัสดุสิ้นเปลืองทำงานปกติ\nเวลา: ' + new Date().toLocaleString('th-TH'));
     return { success: true, message: 'ส่งข้อความทดสอบแล้ว' };
+  } catch(err) { return { success: false, message: err.message }; }
+}
+
+// ============================================================
+// LINE MESSAGING API
+// ============================================================
+
+/** sendLine — ส่งข้อความแจ้งเตือนผ่าน LINE Messaging API (Push Message) */
+function sendLine(message) {
+  try {
+    var cfg = getConfig();
+    if (!cfg.line_enabled || !cfg.line_channel_token || !cfg.line_target_id) return;
+    var plainMsg = message.replace(/<b>/g,'').replace(/<\/b>/g,'').replace(/<[^>]+>/g,'');
+    var resp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
+      method: 'post',
+      headers: {
+        'Authorization': 'Bearer ' + cfg.line_channel_token,
+        'Content-Type': 'application/json'
+      },
+      payload: JSON.stringify({
+        to: cfg.line_target_id,
+        messages: [{ type: 'text', text: plainMsg }]
+      }),
+      muteHttpExceptions: true
+    });
+    var code = resp.getResponseCode();
+    if (code !== 200) {
+      console.error('LINE API error ' + code + ': ' + resp.getContentText());
+    }
+  } catch(err) { console.error('LINE error:', err); }
+}
+
+/** sendNotification — ส่งแจ้งเตือนทั้ง Telegram และ LINE */
+function sendNotification(message) {
+  sendTelegram(message);
+  sendLine(message);
+}
+
+/** testLine — ทดสอบการส่ง LINE Messaging API */
+function testLine(token) {
+  try {
+    var session = validateSession(token);
+    if (!session || session.role !== 'admin') return { success: false, message: 'ไม่มีสิทธิ์' };
+    var cfg = getConfig();
+    if (!cfg.line_enabled || !cfg.line_channel_token || !cfg.line_target_id) {
+      return { success: false, message: 'กรุณาตั้งค่า LINE Channel Token และ Target ID ก่อน' };
+    }
+    sendLine('ทดสอบการแจ้งเตือน LINE\nระบบวัสดุสิ้นเปลืองทำงานปกติ\nเวลา: ' + new Date().toLocaleString('th-TH'));
+    return { success: true, message: 'ส่งข้อความทดสอบ LINE แล้ว' };
   } catch(err) { return { success: false, message: err.message }; }
 }
 

@@ -6,6 +6,7 @@
 var _wdData   = [];
 var _wdPage   = 1;
 var _wdFilter = 'all';
+var _wdCart   = {}; // { itemId: qty }
 var _txData   = [];
 var _txPage   = 1;
 var _txFilter = { type:'all', date_from:'', date_to:'' };
@@ -118,40 +119,184 @@ function buildWithdrawPage() {
 
 function setWdFilter(f) { _wdFilter=f; _wdPage=1; buildWithdrawPage(); }
 
-// Modal เลือกวัสดุก่อนเบิก
+// ===== CART-BASED WITHDRAW (เบิกหลายรายการ) =====
 function openWithdrawSelectModal() {
+  _wdCart = {};
   if (_itemsData.length === 0) {
     showLoading('โหลด...');
-    callAPI('getItems', AUTH.token).then(function(res){ hideLoading(); _itemsData = res.data||[]; _openWdSelect(); });
-  } else _openWdSelect();
+    callAPI('getItems', AUTH.token).then(function(res){
+      hideLoading(); _itemsData = res.data||[]; _openWdCartModal();
+    }).catch(function(){ hideLoading(); showError('โหลดข้อมูลไม่สำเร็จ'); });
+  } else { _openWdCartModal(); }
 }
-function _openWdSelect() {
+
+function _openWdCartModal() {
+  var purposeOpts = ['ห้องพยาบาล','ห้องครัว','ห้องทำความสะอาด','สำนักงาน','ห้องเรียน','อื่นๆ']
+    .map(function(p){ return '<option>' + p + '</option>'; }).join('');
   var body = '<div class="space-y-3">'
+    // Cart summary
+    + '<div id="wdCartSummary" class="hidden bg-blue-50 border border-blue-200 rounded-xl p-3">'
+    + '<div class="flex items-center justify-between mb-2">'
+    + '<span class="text-sm font-semibold text-blue-700"><i class="fi fi-rr-shopping-cart mr-1"></i>รายการที่เลือก: <span id="cartCount">0</span> รายการ</span>'
+    + '<button type="button" onclick="clearAllCart()" class="text-xs text-red-500 hover:text-red-700">ล้างทั้งหมด</button>'
+    + '</div><div id="wdCartItems" class="space-y-1 max-h-28 overflow-y-auto"></div></div>'
+    // Purpose + Note
+    + '<div class="grid grid-cols-2 gap-3">'
+    + '<div><label class="form-label">วัตถุประสงค์ *</label>'
+    + '<select id="wdCartPurpose" class="form-input"><option value="">— เลือก —</option>' + purposeOpts + '</select></div>'
+    + '<div><label class="form-label">หมายเหตุ</label>'
+    + '<input type="text" id="wdCartNote" placeholder="รายละเอียดเพิ่มเติม" class="form-input"></div>'
+    + '</div>'
+    // Search
     + '<div class="relative"><i class="fi fi-rr-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm"></i>'
-    + '<input type="text" id="wdItemSearch" placeholder="ค้นหาวัสดุ..." onkeyup="filterWdItemList()" class="w-full pl-9 pr-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-navy-500"></div>'
-    + '<div id="wdItemList" class="max-h-72 overflow-y-auto space-y-1">' + buildWdItemList(_itemsData) + '</div></div>';
-  openModal('เลือกรายการวัสดุที่ต้องการเบิก', body, '<button onclick="closeModal()" class="btn-secondary">ยกเลิก</button>');
+    + '<input type="text" id="wdItemSearch" placeholder="ค้นหาวัสดุ..." onkeyup="filterWdItemList()"'
+    + ' class="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-navy-500"></div>'
+    // Item list
+    + '<div id="wdItemList" class="max-h-64 overflow-y-auto space-y-1">' + buildWdItemListCart(_itemsData) + '</div>'
+    + '</div>';
+  var footer = '<button onclick="closeModal()" class="btn-secondary">ยกเลิก</button>'
+    + '<button onclick="submitWdCart()" class="btn-primary">'
+    + '<i class="fi fi-rr-inbox-out mr-1"></i>ยื่นคำขอ (<span id="cartBtnCount">0</span> รายการ)</button>';
+  openModal('เบิกวัสดุ — เลือกได้หลายรายการ', body, footer);
 }
-function buildWdItemList(data) {
-  if (data.length === 0) return '<p class="text-center text-sm text-gray-400 py-4">ไม่พบรายการ</p>';
+
+function buildWdItemListCart(data) {
+  if (!data || data.length === 0) return '<p class="text-center text-sm text-gray-400 py-4">ไม่พบรายการ</p>';
   return data.map(function(i) {
     var sClass = getStockClass(i.current_stock, i.min_stock);
-    var imgHtml = i.image_file_id ? '<img src="https://drive.google.com/thumbnail?id=' + i.image_file_id + '&sz=w200-h200" class="w-9 h-9 object-cover rounded-xl border border-gray-200 flex-shrink-0">' : '<div class="w-9 h-9 bg-navy-100 rounded-xl flex items-center justify-center flex-shrink-0"><i class="fi fi-rr-box-open-full text-navy-700 text-sm"></i></div>';
-    return '<div onclick="selectWdItem(\'' + i.id + '\')" class="flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer hover:bg-navy-50 border border-transparent hover:border-navy-200 transition">'
+    var qty = _wdCart[i.id] || 0;
+    var imgHtml = i.image_file_id
+      ? '<img src="https://drive.google.com/thumbnail?id=' + i.image_file_id + '&sz=w100-h100" class="w-9 h-9 object-cover rounded-lg border border-gray-200 flex-shrink-0">'
+      : '<div class="w-9 h-9 bg-navy-100 rounded-lg flex items-center justify-center flex-shrink-0"><i class="fi fi-rr-box-open-full text-navy-700 text-sm"></i></div>';
+    var rowCls = qty > 0
+      ? 'flex items-center gap-2 px-3 py-2 rounded-xl border border-navy-300 bg-navy-50 transition'
+      : 'flex items-center gap-2 px-3 py-2 rounded-xl border border-gray-100 hover:bg-gray-50 transition';
+    var qtyCtrl = i.current_stock > 0
+      ? '<div class="flex items-center gap-1 flex-shrink-0">'
+        + '<button type="button" onclick="changeCartQty(\'' + i.id + '\',-1)" class="w-6 h-6 bg-gray-200 text-gray-700 rounded-lg flex items-center justify-center hover:bg-red-100 hover:text-red-600 font-bold text-base leading-none">-</button>'
+        + '<input type="number" id="cartQty_' + i.id + '" value="' + qty + '" min="0" max="' + i.current_stock + '"'
+        + ' onchange="setCartQty(\'' + i.id + '\',this.value)"'
+        + ' class="w-12 text-center text-sm border border-gray-300 rounded-lg py-0.5 focus:outline-none focus:ring-1 focus:ring-navy-500">'
+        + '<button type="button" onclick="changeCartQty(\'' + i.id + '\',1)" class="w-6 h-6 bg-navy-700 text-white rounded-lg flex items-center justify-center hover:bg-navy-800 font-bold text-base leading-none">+</button>'
+        + '</div>'
+      : '<span class="text-xs text-red-400 flex-shrink-0">หมดสต็อก</span>';
+    return '<div class="' + rowCls + '" id="wdItemRow_' + i.id + '">'
       + imgHtml
-      + '<div class="flex-1 min-w-0"><p class="text-sm font-medium text-gray-700 truncate">' + escHtml(i.name) + '</p>'
-      + '<p class="text-xs text-gray-400">' + escHtml(i.item_code) + ' • ' + escHtml(i.size||'') + ' • ' + i.current_stock + ' ' + i.unit + '</p></div>'
-      + '<span class="px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ' + sClass + '">' + getStockLabel(i.current_stock, i.min_stock) + '</span></div>';
+      + '<div class="flex-1 min-w-0">'
+      + '<p class="text-sm font-medium text-gray-700 truncate">' + escHtml(i.name) + (i.size ? ' <span class="text-gray-400 font-normal">(' + escHtml(i.size) + ')</span>' : '') + '</p>'
+      + '<p class="text-xs text-gray-400">คงเหลือ: <b class="text-gray-600">' + i.current_stock + '</b> ' + escHtml(i.unit) + '</p>'
+      + '</div>'
+      + '<span class="px-1.5 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ' + sClass + '">' + getStockLabel(i.current_stock, i.min_stock) + '</span>'
+      + qtyCtrl
+      + '</div>';
   }).join('');
 }
+
+function changeCartQty(itemId, delta) {
+  var item = _itemsData.find(function(i){ return i.id === itemId; });
+  if (!item) return;
+  setCartQty(itemId, (parseInt(_wdCart[itemId]||0)) + delta);
+}
+
+function setCartQty(itemId, qty) {
+  var item = _itemsData.find(function(i){ return i.id === itemId; });
+  if (!item) return;
+  qty = Math.max(0, Math.min(item.current_stock, parseInt(qty)||0));
+  var input = document.getElementById('cartQty_' + itemId);
+  if (input) input.value = qty;
+  if (qty > 0) { _wdCart[itemId] = qty; } else { delete _wdCart[itemId]; }
+  var row = document.getElementById('wdItemRow_' + itemId);
+  if (row) {
+    row.className = 'flex items-center gap-2 px-3 py-2 rounded-xl border transition'
+      + (qty > 0 ? ' border-navy-300 bg-navy-50' : ' border-gray-100 hover:bg-gray-50');
+  }
+  updateCartSummary();
+}
+
+function clearAllCart() {
+  Object.keys(_wdCart).forEach(function(id){ delete _wdCart[id]; });
+  _itemsData.forEach(function(i) {
+    var inp = document.getElementById('cartQty_' + i.id);
+    if (inp) inp.value = 0;
+    var row = document.getElementById('wdItemRow_' + i.id);
+    if (row) row.className = 'flex items-center gap-2 px-3 py-2 rounded-xl border border-gray-100 hover:bg-gray-50 transition';
+  });
+  updateCartSummary();
+}
+
+function updateCartSummary() {
+  var keys = Object.keys(_wdCart);
+  var count = keys.length;
+  var countEl = document.getElementById('cartCount');
+  var btnEl   = document.getElementById('cartBtnCount');
+  if (countEl) countEl.textContent = count;
+  if (btnEl)   btnEl.textContent   = count;
+  var summary = document.getElementById('wdCartSummary');
+  var itemsEl = document.getElementById('wdCartItems');
+  if (!summary || !itemsEl) return;
+  if (count === 0) { summary.classList.add('hidden'); return; }
+  summary.classList.remove('hidden');
+  var html = '';
+  keys.forEach(function(id) {
+    var item = _itemsData.find(function(i){ return i.id === id; });
+    if (!item) return;
+    html += '<div class="flex items-center gap-2 text-xs py-0.5">'
+      + '<span class="flex-1 text-gray-700 truncate">' + escHtml(item.name) + '</span>'
+      + '<span class="font-bold text-navy-700 whitespace-nowrap">' + _wdCart[id] + ' ' + escHtml(item.unit) + '</span>'
+      + '<button type="button" onclick="setCartQty(\'' + id + '\',0)" class="text-red-400 hover:text-red-600 ml-1"><i class="fi fi-rr-cross text-xs"></i></button>'
+      + '</div>';
+  });
+  itemsEl.innerHTML = html;
+}
+
 function filterWdItemList() {
   var q = (document.getElementById('wdItemSearch')||{}).value||'';
-  var filtered = _itemsData.filter(function(i){ return !q || i.name.toLowerCase().includes(q.toLowerCase()) || (i.item_code||'').includes(q); });
-  document.getElementById('wdItemList').innerHTML = buildWdItemList(filtered);
+  var filtered = _itemsData.filter(function(i){
+    return !q || i.name.toLowerCase().includes(q.toLowerCase()) || (i.item_code||'').includes(q);
+  });
+  document.getElementById('wdItemList').innerHTML = buildWdItemListCart(filtered);
 }
-function selectWdItem(id) {
+
+function submitWdCart() {
+  var purpose  = (document.getElementById('wdCartPurpose')||{}).value||'';
+  var note     = (document.getElementById('wdCartNote')||{}).value||'';
+  var entries  = Object.keys(_wdCart).map(function(id){ return { id: id, qty: _wdCart[id] }; });
+  if (entries.length === 0) { showError('กรุณาเลือกวัสดุอย่างน้อย 1 รายการ'); return; }
+  if (!purpose) { showError('กรุณาเลือกวัตถุประสงค์'); return; }
   closeModal();
-  openWithdrawModal(id);
+  showLoading('กำลังยื่นคำขอ...');
+  var results = [], errors = [], idx = 0;
+  function processNext() {
+    if (idx >= entries.length) {
+      hideLoading(); _wdCart = {};
+      if (errors.length > 0) {
+        Swal.fire({
+          icon: results.length > 0 ? 'warning' : 'error',
+          title: results.length > 0 ? 'บันทึกบางส่วน' : 'เกิดข้อผิดพลาด',
+          html: (results.length > 0 ? '<p><b>สำเร็จ:</b> ' + results.join(', ') + '</p>' : '')
+            + '<p><b>ผิดพลาด:</b><br>' + errors.join('<br>') + '</p>',
+          customClass: { popup: 'swal2-popup' }
+        });
+      } else {
+        showSuccess('ยื่นคำขอเบิก ' + results.length + ' รายการเรียบร้อย');
+      }
+      if (_currentPage === 'withdraw') renderWithdraw();
+      else if (_currentPage === 'dashboard') renderDashboard();
+      return;
+    }
+    var entry = entries[idx++];
+    callAPI('addWithdrawal', AUTH.token, { item_id: entry.id, quantity: entry.qty, purpose: purpose, note: note, via_qr: false })
+      .then(function(res) {
+        if (res.success) { results.push(res.withdraw_no); }
+        else {
+          var item = _itemsData.find(function(i){ return i.id === entry.id; });
+          errors.push((item ? escHtml(item.name) : entry.id) + ': ' + res.message);
+        }
+        processNext();
+      })
+      .catch(function(){ errors.push('เกิดข้อผิดพลาด (รายการที่ ' + idx + ')'); processNext(); });
+  }
+  processNext();
 }
 
 // Submit Withdraw (common)

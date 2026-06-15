@@ -5,6 +5,8 @@
 
 // ===== REPORTS =====
 var _reportCharts = {};
+var _lastMonthlyData = null;
+var _lastMonthlyMeta = {};
 
 function renderReports() {
   var now = new Date();
@@ -194,9 +196,14 @@ function loadMonthlyReport() {
     var mNames = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
     var daysInMonth = new Date(year, month, 0).getDate();
 
+    _lastMonthlyData = data;
+    _lastMonthlyMeta = { year: year, month: month, daysInMonth: daysInMonth };
     var html = '<div class="card mt-4"><div class="card-header">';
     html += '<h3 class="font-semibold text-gray-700 text-sm">สรุปการเบิกวัสดุ ' + mNames[month-1] + ' ' + (year+543) + '</h3>';
-    html += '<button onclick="exportMonthlyExcel(' + year + ',' + month + ')" class="btn-success btn-sm flex items-center gap-1"><i class="fi fi-rr-file-spreadsheet"></i> Export Excel</button></div>';
+    html += '<div class="flex gap-2">';
+    html += '<button onclick="exportMonthlyCSV()" class="btn-success btn-sm flex items-center gap-1"><i class="fi fi-rr-file-spreadsheet"></i> Export CSV</button>';
+    html += '<button onclick="exportMonthlyExcel(' + year + ',' + month + ')" class="btn-secondary btn-sm flex items-center gap-1"><i class="fi fi-rr-file-spreadsheet"></i> Export Excel</button>';
+    html += '</div></div>';
     html += '<div class="overflow-x-auto"><table class="w-full text-xs border-collapse">';
     html += '<thead class="bg-navy-700 text-white sticky top-0">';
     html += '<tr><th class="px-2 py-2 text-left min-w-[160px] border border-navy-600">ชื่อวัสดุ</th>';
@@ -256,6 +263,46 @@ function exportLowStock() {
     if (res.success) { window.open(res.url, '_blank'); }
     else showError(res.message);
   }).catch(function() { hideLoading(); showError('Export ไม่สำเร็จ'); });
+}
+
+function exportMonthlyCSV() {
+  if (!_lastMonthlyData || !_lastMonthlyMeta.year) { showError('กรุณาโหลดรายงานก่อน Export'); return; }
+  var mNames = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+  var year = _lastMonthlyMeta.year;
+  var month = _lastMonthlyMeta.month;
+  var daysInMonth = _lastMonthlyMeta.daysInMonth;
+  var rows = [];
+  // Title
+  rows.push(['สรุปการเบิกวัสดุ ' + mNames[month-1] + ' ' + (year+543)]);
+  // Header
+  var hdr = ['ชื่อวัสดุ','ขนาด','หน่วย','รับเข้า'];
+  for (var d = 1; d <= daysInMonth; d++) hdr.push(String(d));
+  hdr.push('รวมเบิก','คงเหลือ');
+  rows.push(hdr);
+  // Data
+  _lastMonthlyData.forEach(function(row) {
+    var r = [row.name, row.size||'', row.unit, row.received||0];
+    for (var d = 1; d <= daysInMonth; d++) r.push(row.daily[d]||0);
+    r.push(row.total_withdraw||0, row.current_stock||0);
+    rows.push(r);
+  });
+  // Build CSV string (UTF-8 BOM for Excel Thai compatibility)
+  var csv = '﻿' + rows.map(function(r) {
+    return r.map(function(cell) {
+      var s = String(cell === null || cell === undefined ? '' : cell);
+      if (s.indexOf(',') !== -1 || s.indexOf('"') !== -1 || s.indexOf('\n') !== -1) {
+        s = '"' + s.replace(/"/g,'""') + '"';
+      }
+      return s;
+    }).join(',');
+  }).join('\r\n');
+  // Trigger download
+  var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = 'สรุปเบิกวัสดุ_' + mNames[month-1] + '_' + (year+543) + '.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // ===== PROFILE =====
@@ -592,6 +639,25 @@ function buildSettingsPage(cfg) {
   html += '<button onclick="doTestTelegram()" class="btn-secondary btn-sm flex items-center gap-1.5 w-fit"><i class="fi fi-rr-paper-plane"></i> ส่ง Test Message</button>';
   html += '</div></div>';
 
+  // Section 2b: LINE Messaging API
+  html += '<div class="card"><div class="card-header"><h3 class="font-semibold text-gray-700 flex items-center gap-2"><i class="fi fi-rr-comment text-green-600"></i> การแจ้งเตือน LINE Messaging API</h3></div>';
+  html += '<div class="card-body space-y-4">';
+  html += '<div class="bg-green-50 border border-green-200 rounded-xl p-3 text-xs text-green-700">';
+  html += '<p class="font-semibold mb-1">วิธีตั้งค่า LINE Messaging API</p>';
+  html += '<ol class="list-decimal list-inside space-y-1">';
+  html += '<li>เข้า <b>developers.line.biz</b> → สร้าง Provider → สร้าง Messaging API channel</li>';
+  html += '<li>ไปที่ Messaging API tab → คัดลอก <b>Channel access token</b> (Long-lived)</li>';
+  html += '<li>เพิ่ม LINE Bot เข้า Group ที่ต้องการรับแจ้งเตือน</li>';
+  html += '<li>หา <b>Group ID</b>: ส่งข้อความใน Group → ดู Webhook event หรือใช้ Messaging API console</li>';
+  html += '<li>Group ID ขึ้นต้นด้วย <b>C</b>, User ID ขึ้นต้นด้วย <b>U</b></li>';
+  html += '</ol></div>';
+  html += '<div class="flex items-center gap-3"><input type="checkbox" id="cfgLineEnabled" ' + (cfg.line_enabled?'checked':'') + ' class="w-4 h-4 rounded accent-navy-700">';
+  html += '<label for="cfgLineEnabled" class="text-sm font-medium text-gray-700">เปิดใช้งานการแจ้งเตือน LINE</label></div>';
+  html += fieldHTML('Channel Access Token', 'cfgLineChannelToken', 'text', cfg.line_channel_token||'', 'Long-lived token จาก LINE Developers Console');
+  html += fieldHTML('Target ID (Group/User ID)', 'cfgLineTargetId', 'text', cfg.line_target_id||'', 'Group ID ขึ้นต้นด้วย C / User ID ขึ้นต้นด้วย U');
+  html += '<button onclick="doTestLine()" class="btn-secondary btn-sm flex items-center gap-1.5 w-fit"><i class="fi fi-rr-paper-plane"></i> ทดสอบ LINE</button>';
+  html += '</div></div>';
+
   // Section 3: สต็อก
   html += '<div class="card"><div class="card-header"><h3 class="font-semibold text-gray-700 flex items-center gap-2"><i class="fi fi-rr-layers text-navy-600"></i> การตั้งค่าสต็อก</h3></div>';
   html += '<div class="card-body">';
@@ -619,6 +685,9 @@ function saveSettings() {
       telegram_enabled:      (document.getElementById('cfgTgEnabled')||{}).checked||false,
       telegram_bot_token:    (document.getElementById('cfgTgToken')||{}).value||'',
       telegram_chat_id:      (document.getElementById('cfgTgChatId')||{}).value||'',
+      line_enabled:          (document.getElementById('cfgLineEnabled')||{}).checked||false,
+      line_channel_token:    (document.getElementById('cfgLineChannelToken')||{}).value||'',
+      line_target_id:        (document.getElementById('cfgLineTargetId')||{}).value||'',
       low_stock_threshold:   parseInt((document.getElementById('cfgLowStock')||{}).value||5)
     };
     if (logoFileId) data.app_logo = logoFileId;
@@ -669,6 +738,15 @@ function previewLogoChange(input) {
 function doTestTelegram() {
   showLoading('กำลังส่ง Test Message...');
   callAPI('testTelegram', AUTH.token).then(function(res) {
+    hideLoading();
+    if (res.success) showSuccess(res.message);
+    else showError(res.message);
+  }).catch(function() { hideLoading(); showError('เกิดข้อผิดพลาด'); });
+}
+
+function doTestLine() {
+  showLoading('กำลังส่ง Test LINE...');
+  callAPI('testLine', AUTH.token).then(function(res) {
     hideLoading();
     if (res.success) showSuccess(res.message);
     else showError(res.message);
